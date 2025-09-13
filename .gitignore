@@ -3,3 +3,5 @@ SecureTunnel Synopsis InfoSec Lab.docx
 refs.pdf
 roadmap.pdf
 .venv/
+__pycache__/
+*.pyc

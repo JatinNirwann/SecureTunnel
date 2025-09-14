@@ -219,9 +219,9 @@ class VPNServer:
                 'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
-                'X-Forwarded-For': '203.0.113.195',
-                'X-Real-IP': '203.0.113.195',
-                'CF-Connecting-IP': '203.0.113.195'
+                'X-Forwarded-For': '64.227.128.92',
+                'X-Real-IP': '64.227.128.92',
+                'CF-Connecting-IP': '64.227.128.92'
             }
             
             headers.update(geo_headers)

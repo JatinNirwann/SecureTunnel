@@ -1,24 +1,11 @@
-"""
-Database module for user authentication and logging.
-Handles SQLite database operations for the VPN prototype.
-"""
-
 import sqlite3
 import hashlib
 import os
 from datetime import datetime
 
 
-class DatabaseManager:
-    """Manages user authentication and connection logging using SQLite."""
-    
+class DatabaseManager:    
     def __init__(self, db_path="vpn_users.db"):
-        """
-        Initialize the database manager.
-        
-        Args:
-            db_path (str): Path to the SQLite database file
-        """
         self.db_path = db_path
         self.init_database()
     
@@ -53,15 +40,7 @@ class DatabaseManager:
             pass
     
     def _hash_password(self, password):
-        """
-        Hash a password using SHA-256.
         
-        Args:
-            password (str): Plain text password
-            
-        Returns:
-            str: Hashed password
-        """
         return hashlib.sha256(password.encode()).hexdigest()
     
     def create_user(self, username, password):
@@ -116,15 +95,7 @@ class DatabaseManager:
             pass
     
     def get_connection_logs(self, limit=10):
-        """
-        Retrieve recent connection logs.
-        
-        Args:
-            limit (int): Maximum number of logs to retrieve
-            
-        Returns:
-            list: List of connection log tuples
-        """
+
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -140,7 +111,6 @@ class DatabaseManager:
             return []
     
     def create_default_users(self):
-        """Create default test users for the lab demonstration."""
         test_users = [
             ("alice", "password123"),
             ("bob", "securepass"),
@@ -152,15 +122,11 @@ class DatabaseManager:
 
 
 def main():
-    """Test the database functionality."""
-    # Initialize database
     db = DatabaseManager()
     
-    # Create default test users
-    print("\n=== Creating Default Test Users ===")
+    print("\n=== Creating Test Users ===")
     db.create_default_users()
     
-    # Test authentication
     print("\n=== Testing Authentication ===")
     print(f"Alice login (correct): {db.verify_user('alice', 'password123')}")
     print(f"Alice login (wrong): {db.verify_user('alice', 'wrongpass')}")

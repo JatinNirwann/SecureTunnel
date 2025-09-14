@@ -3,15 +3,12 @@ import json
 import sys
 import os
 import getpass
-from datetime import datetime
 
 sys.path.append(os.path.dirname(__file__))
-
 from crypto_utils import CryptoManager
 
-
 class VPNClient:
-    def __init__(self, server_host='localhost', server_port=8888):
+    def __init__(self, server_host='64.227.128.92', server_port=8888):
         self.server_host = server_host
         self.server_port = server_port
         self.connected = False
@@ -23,12 +20,43 @@ class VPNClient:
     def connect_to_server(self):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(10)
             self.socket.connect((self.server_host, self.server_port))
             self.connected = True
             return True
-        except socket.error:
+        except Exception:
             return False
     
+    def register_user(self, username=None, password=None):
+        if not self.connected:
+            return False
+        
+        try:
+            if not username:
+                username = input("New username: ")
+            if not password:
+                password = getpass.getpass("New password: ")
+            
+            reg_message = {
+                'type': 'REGISTER',
+                'data': {'username': username, 'password': password},
+                'encrypted': False
+            }
+            
+            self.socket.send(json.dumps(reg_message).encode('utf-8'))
+            response_data = self.socket.recv(1024).decode('utf-8')
+            response = json.loads(response_data)
+            
+            if (response.get('type') == 'REGISTER_RESPONSE' and 
+                response.get('data', {}).get('status') == 'SUCCESS'):
+                return True
+            else:
+                print(response.get('data', {}).get('message', 'Registration failed'))
+                return False
+                
+        except Exception:
+            return False
+
     def authenticate(self, username=None, password=None):
         if not self.connected:
             return False
@@ -54,6 +82,7 @@ class VPNClient:
                 self.authenticated = True
                 return True
             else:
+                print(response.get('data', {}).get('message', 'Authentication failed'))
                 return False
                 
         except Exception:
@@ -162,8 +191,8 @@ class VPNClient:
             self.authenticated = False
     
     def interactive_session(self):
-        print("\n=== SecureTunnel VPN Client ===")
-        print("Commands: get <url>, ping, status, help, exit")
+        print("\nSecureTunnel VPN Client")
+        print("Commands: get <url>, register, status, help, exit")
         
         while True:
             try:
@@ -180,8 +209,9 @@ class VPNClient:
                         if len(response['content']) > 500:
                             print("...")
                 
-                elif command == 'ping':
-                    print("Ping functionality not implemented")
+                elif command == 'register':
+                    if self.register_user():
+                        print("Registration successful! You can now login.")
                 
                 elif command == 'status':
                     print(f"Connected: {self.connected}")
@@ -189,7 +219,7 @@ class VPNClient:
                     print(f"Encryption: {self.encryption_enabled}")
                 
                 elif command in ['help', '?']:
-                    print("Commands: get <url>, ping, status, help, exit")
+                    print("Commands: get <url>, register, status, help, exit")
                 
                 elif command in ['exit', 'quit']:
                     break
@@ -210,10 +240,11 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='SecureTunnel VPN Client')
-    parser.add_argument('--host', default='localhost', help='VPN server host')
+    parser.add_argument('--host', default='64.227.128.92', help='VPN server host')
     parser.add_argument('--port', type=int, default=8888, help='VPN server port')
     parser.add_argument('--no-encryption', action='store_true', help='Disable encryption')
     parser.add_argument('--url', help='URL to fetch (non-interactive mode)')
+    parser.add_argument('--register', action='store_true', help='Register new user')
     
     args = parser.parse_args()
     
@@ -223,6 +254,20 @@ def main():
         if not client.connect_to_server():
             print("Failed to connect to server")
             return 1
+        
+        if args.register:
+            if client.register_user():
+                print("Registration successful!")
+                return 0
+            else:
+                print("Registration failed")
+                return 1
+        
+        choice = input("Login (l) or Register (r)? ").lower()
+        if choice == 'r':
+            if not client.register_user():
+                print("Registration failed")
+                return 1
         
         if not client.authenticate():
             print("Authentication failed")

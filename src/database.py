@@ -5,8 +5,12 @@ from datetime import datetime
 
 
 class DatabaseManager:    
-    def __init__(self, db_path="vpn_users.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        if db_path is None:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.db_path = os.path.join(script_dir, "..", "vpn_users.db")
+        else:
+            self.db_path = db_path
         self.init_database()
     
     def init_database(self):

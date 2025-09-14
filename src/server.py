@@ -4,16 +4,16 @@ import json
 import requests
 import sys
 import os
-from datetime import datetime
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 sys.path.append(os.path.dirname(__file__))
-
 from database import DatabaseManager
 from crypto_utils import CryptoManager
 
-
 class VPNServer:
-    def __init__(self, host='localhost', port=8888, encryption_enabled=True):
+    def __init__(self, host='0.0.0.0', port=8888, encryption_enabled=True):
         self.host = host
         self.port = port
         self.encryption_enabled = encryption_enabled
@@ -86,7 +86,9 @@ class VPNServer:
             auth_data = client_socket.recv(1024).decode('utf-8')
             auth_message = json.loads(auth_data)
             
-            if auth_message.get('type') != 'AUTH':
+            if auth_message.get('type') == 'REGISTER':
+                return self.register_user(client_socket, auth_message)
+            elif auth_message.get('type') != 'AUTH':
                 return False
             
             username = auth_message['data']['username']
@@ -109,6 +111,31 @@ class VPNServer:
                 }
                 client_socket.send(json.dumps(response).encode('utf-8'))
                 self.database.log_connection(username, client_address[0], 'FAILED')
+                return False
+                
+        except Exception:
+            return False
+    
+    def register_user(self, client_socket, reg_message):
+        try:
+            username = reg_message['data']['username']
+            password = reg_message['data']['password']
+            
+            if self.database.create_user(username, password):
+                response = {
+                    'type': 'REGISTER_RESPONSE',
+                    'data': {'status': 'SUCCESS', 'message': 'Registration successful'},
+                    'encrypted': False
+                }
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return False
+            else:
+                response = {
+                    'type': 'REGISTER_RESPONSE',
+                    'data': {'status': 'FAILED', 'message': 'Username already exists'},
+                    'encrypted': False
+                }
+                client_socket.send(json.dumps(response).encode('utf-8'))
                 return False
                 
         except Exception:
@@ -184,13 +211,29 @@ class VPNServer:
             if not url:
                 return
             
+            geo_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'X-Forwarded-For': '203.0.113.195',
+                'X-Real-IP': '203.0.113.195',
+                'CF-Connecting-IP': '203.0.113.195'
+            }
+            
+            headers.update(geo_headers)
+            
             response = requests.request(
                 method=method,
                 url=url,
                 headers=headers,
                 data=data,
                 timeout=10,
-                allow_redirects=True
+                allow_redirects=True,
+                verify=False
             )
             
             response_data = {
@@ -243,13 +286,13 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='SecureTunnel VPN Server')
-    parser.add_argument('--host', default='localhost', help='Server host')
+    parser.add_argument('--host', default='0.0.0.0', help='Server host')
     parser.add_argument('--port', type=int, default=8888, help='Server port')
     parser.add_argument('--no-encryption', action='store_true', help='Disable encryption')
     
     args = parser.parse_args()
     
-    print("=== Initializing VPN Server ===")
+    print("Initializing VPN Server")
     db = DatabaseManager()
     db.create_default_users()
     

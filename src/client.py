@@ -1,301 +1,155 @@
 import socket
-import json
+import random
 import sys
-import os
-import getpass
+import threading
 
-sys.path.append(os.path.dirname(__file__))
-from crypto_utils import CryptoManager
+VPN_SERVER_HOST = '139.59.231.109'
+VPN_SERVER_PORT = 9999
 
-class VPNClient:
-    def __init__(self, server_host='64.227.128.92', server_port=8888):
-        self.server_host = server_host
-        self.server_port = server_port
-        self.connected = False
-        self.authenticated = False
-        self.encryption_enabled = True
-        self.crypto = CryptoManager()
-        self.socket = None
-    
-    def connect_to_server(self):
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(10)
-            self.socket.connect((self.server_host, self.server_port))
-            self.connected = True
-            return True
-        except Exception:
-            return False
-    
-    def register_user(self, username=None, password=None):
-        if not self.connected:
-            return False
-        
-        try:
-            if not username:
-                username = input("New username: ")
-            if not password:
-                password = getpass.getpass("New password: ")
-            
-            reg_message = {
-                'type': 'REGISTER',
-                'data': {'username': username, 'password': password},
-                'encrypted': False
-            }
-            
-            self.socket.send(json.dumps(reg_message).encode('utf-8'))
-            response_data = self.socket.recv(1024).decode('utf-8')
-            response = json.loads(response_data)
-            
-            if (response.get('type') == 'REGISTER_RESPONSE' and 
-                response.get('data', {}).get('status') == 'SUCCESS'):
-                return True
-            else:
-                print(response.get('data', {}).get('message', 'Registration failed'))
-                return False
-                
-        except Exception:
-            return False
+LOCAL_PROXY_HOST = '127.0.0.1'
+LOCAL_PROXY_PORT = 8080
 
-    def authenticate(self, username=None, password=None):
-        if not self.connected:
-            return False
-        
-        try:
-            if not username:
-                username = input("Username: ")
-            if not password:
-                password = getpass.getpass("Password: ")
-            
-            auth_message = {
-                'type': 'AUTH',
-                'data': {'username': username, 'password': password},
-                'encrypted': False
-            }
-            
-            self.socket.send(json.dumps(auth_message).encode('utf-8'))
-            response_data = self.socket.recv(1024).decode('utf-8')
-            response = json.loads(response_data)
-            
-            if (response.get('type') == 'AUTH_RESPONSE' and 
-                response.get('data', {}).get('status') == 'SUCCESS'):
-                self.authenticated = True
-                return True
-            else:
-                print(response.get('data', {}).get('message', 'Authentication failed'))
-                return False
-                
-        except Exception:
-            return False
-    
-    def perform_key_exchange(self):
-        if not self.authenticated:
-            return False
-        
-        try:
-            key_data = self.socket.recv(2048).decode('utf-8')
-            key_message = json.loads(key_data)
-            
-            if key_message.get('type') != 'PUBLIC_KEY':
-                return False
-            
-            server_public_key_b64 = key_message['data']['public_key']
-            server_public_key = self.crypto.import_public_key(server_public_key_b64)
-            
-            if not server_public_key:
-                return False
-            
-            aes_key = self.crypto.generate_aes_key(32)
-            if not aes_key:
-                return False
-            
-            encrypted_aes_key = self.crypto.rsa_encrypt(aes_key, server_public_key)
-            if not encrypted_aes_key:
-                return False
-            
-            aes_message = {
-                'type': 'AES_KEY',
-                'data': {'aes_key': encrypted_aes_key},
-                'encrypted': False
-            }
-            
-            self.socket.send(json.dumps(aes_message).encode('utf-8'))
-            response_data = self.socket.recv(1024).decode('utf-8')
-            response = json.loads(response_data)
-            
-            if (response.get('type') == 'KEY_EXCHANGE_RESPONSE' and 
-                response.get('data', {}).get('status') == 'SUCCESS'):
-                self.encryption_enabled = True
-                return True
-            else:
-                return False
-                
-        except Exception:
-            return False
-    
-    def send_http_request(self, method='GET', url=None, headers=None, data=None):
-        if not self.connected or not self.authenticated:
-            return None
-        
-        try:
-            if not url:
-                url = input("Enter URL to fetch: ")
-            
-            if not url.startswith(('http://', 'https://')):
-                url = 'http://' + url
-            
-            request_data = {
-                'method': method,
-                'url': url,
-                'headers': headers or {},
-                'data': data
-            }
-            
-            if self.encryption_enabled:
-                message = self.crypto.create_message('HTTP_REQUEST', request_data, encrypted=True)
-            else:
-                message = json.dumps({
-                    'type': 'HTTP_REQUEST',
-                    'data': request_data,
-                    'encrypted': False
-                })
-            
-            if not message:
-                return None
-            
-            self.socket.send(message.encode('utf-8'))
-            response_data = self.socket.recv(8192).decode('utf-8')
-            
-            if self.encryption_enabled:
-                response = self.crypto.parse_message(response_data)
-            else:
-                response = json.loads(response_data)
-            
-            if not response:
-                return None
-            
-            if response.get('type') == 'HTTP_RESPONSE':
-                return response['data']
-            elif response.get('type') == 'HTTP_ERROR':
-                return None
-            else:
-                return None
-                
-        except Exception:
-            return None
-    
-    def disconnect(self):
-        if self.socket:
-            self.socket.close()
-            self.connected = False
-            self.authenticated = False
-    
-    def interactive_session(self):
-        print("\nSecureTunnel VPN Client")
-        print("Commands: get <url>, register, status, help, exit")
-        
+P_PRIME = 23
+G_BASE = 5
+
+def vigenere_encrypt_bytes(plain_bytes, key):
+    """
+    Encrypts a bytes object using a modulo 256 Vigenère cipher.
+    """
+    encrypted_bytes = bytearray()
+    key_len = len(key)
+    for i, byte_val in enumerate(plain_bytes):
+        key_char = key[i % key_len]
+        key_ord = ord(key_char)
+        encrypted_ord = (byte_val + key_ord) % 256
+        encrypted_bytes.append(encrypted_ord)
+    return bytes(encrypted_bytes)
+
+def vigenere_decrypt_bytes(encrypted_bytes, key):
+    decrypted_bytes = bytearray()
+    key_len = len(key)
+    for i, byte_val in enumerate(encrypted_bytes):
+        key_char = key[i % key_len]
+        key_ord = ord(key_char)
+        decrypted_ord = (byte_val - key_ord + 256) % 256 
+        decrypted_bytes.append(decrypted_ord)
+    return bytes(decrypted_bytes)
+# --- END OF REPLACEMENT ---
+
+
+def relay_data(src_conn, dest_conn, shared_secret_key, encrypt):
+    try:
         while True:
-            try:
-                command = input("VPN> ").strip().lower()
-                
-                if command.startswith('get '):
-                    url = command[4:].strip()
-                    response = self.send_http_request(url=url)
-                    
-                    if response:
-                        print(f"\nStatus: {response['status_code']}")
-                        print(f"URL: {response['url']}")
-                        print(f"Content: {response['content'][:500]}")
-                        if len(response['content']) > 500:
-                            print("...")
-                
-                elif command == 'register':
-                    if self.register_user():
-                        print("Registration successful! You can now login.")
-                
-                elif command == 'status':
-                    print(f"Connected: {self.connected}")
-                    print(f"Authenticated: {self.authenticated}")
-                    print(f"Encryption: {self.encryption_enabled}")
-                
-                elif command in ['help', '?']:
-                    print("Commands: get <url>, register, status, help, exit")
-                
-                elif command in ['exit', 'quit']:
-                    break
-                
-                elif command == '':
-                    continue
-                
-                else:
-                    print(f"Unknown command: {command}")
-                    
-            except KeyboardInterrupt:
+            data = src_conn.recv(4096)
+            if not data:
                 break
-            except Exception:
-                pass
+            
+            if encrypt:
+                processed_data = vigenere_encrypt_bytes(data, shared_secret_key)
+            else:
+                processed_data = vigenere_decrypt_bytes(data, shared_secret_key)
+                
+            dest_conn.sendall(processed_data)
+            
+    except (ConnectionResetError, BrokenPipeError):
+        pass
+    except Exception as e:
+        print(f"[Relay Error] {e}")
+    finally:
+        src_conn.close()
+        dest_conn.close()
+        print("[Relay] A connection was closed.")
+
+def handle_browser(browser_socket, addr, vpn_server_host, vpn_server_port):
+    print(f"[Browser] New connection from {addr}")
+    
+    try:
+        connect_request = browser_socket.recv(4096)
+        if not connect_request:
+            print(f"[Browser] No data from browser.")
+            return
+            
+        vpn_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        vpn_server_socket.connect((vpn_server_host, vpn_server_port))
+        print(f"[VPN] Connected to server {vpn_server_host}:{vpn_server_port}")
+        
+        server_public_key = int(vpn_server_socket.recv(1024).decode('utf-8'))
+        client_private_key = random.randint(2, P_PRIME - 1)
+        client_public_key = (G_BASE ** client_private_key) % P_PRIME
+        vpn_server_socket.sendall(str(client_public_key).encode('utf-8'))
+        shared_secret_key = str((server_public_key ** client_private_key) % P_PRIME)
+        print(f"[VPN] Established shared secret: {shared_secret_key}")
+        encrypted_request = vigenere_encrypt_bytes(connect_request, shared_secret_key)
+        vpn_server_socket.sendall(encrypted_request)
+        
+        # 5. Receive the encrypted "200 OK" from the server
+        encrypted_ok = vpn_server_socket.recv(4096)
+        # --- THIS LINE IS UPDATED ---
+        ok_response_bytes = vigenere_decrypt_bytes(encrypted_ok, shared_secret_key)
+        
+        ok_response_str = ok_response_bytes.decode('latin-1')
+
+        if "200 OK" in ok_response_str:
+            browser_socket.sendall(ok_response_bytes)
+            print(f"[Browser] OK response sent. Tunnelling data.")
+        else:
+            print(f"[Browser] Server did not approve connection. Closing.")
+            browser_socket.close()
+            return
+            
+        t1 = threading.Thread(target=relay_data, 
+                              args=(browser_socket, vpn_server_socket, shared_secret_key, True))
+        
+        t2 = threading.Thread(target=relay_data, 
+                              args=(vpn_server_socket, browser_socket, shared_secret_key, False))
+        
+        t1.daemon = True
+        t2.daemon = True
+        t1.start()
+        t2.start()
+        
+        t1.join()
+        t2.join()
+
+    except (ConnectionRefusedError, socket.gaierror):
+        print(f"\n[Error] Connection refused. Is the VPN server running at {vpn_server_host}?")
+    except Exception as e:
+        print(f"[Browser Handler Error] {e}")
+    finally:
+        browser_socket.close()
+        print(f"[Browser] Connection from {addr} closed.")
 
 
 def main():
-    import argparse
+    print(f"--- VPN Client (Local Proxy) starting... ---")
     
-    parser = argparse.ArgumentParser(description='SecureTunnel VPN Client')
-    parser.add_argument('--host', default='64.227.128.92', help='VPN server host')
-    parser.add_argument('--port', type=int, default=8888, help='VPN server port')
-    parser.add_argument('--no-encryption', action='store_true', help='Disable encryption')
-    parser.add_argument('--url', help='URL to fetch (non-interactive mode)')
-    parser.add_argument('--register', action='store_true', help='Register new user')
-    
-    args = parser.parse_args()
-    
-    client = VPNClient(server_host=args.host, server_port=args.port)
+    print(f"Attempting to connect to VPN Server at: {VPN_SERVER_HOST}")
+        
+    local_proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     
     try:
-        if not client.connect_to_server():
-            print("Failed to connect to server")
-            return 1
+        local_proxy_socket.bind((LOCAL_PROXY_HOST, LOCAL_PROXY_PORT))
+        local_proxy_socket.listen()
+        print(f"Local proxy is listening on {LOCAL_PROXY_HOST}:{LOCAL_PROXY_PORT}")
+        print(f"Configure your browser to use HTTP/HTTPS proxy at this address.")
         
-        if args.register:
-            if client.register_user():
-                print("Registration successful!")
-                return 0
-            else:
-                print("Registration failed")
-                return 1
-        
-        choice = input("Login (l) or Register (r)? ").lower()
-        if choice == 'r':
-            if not client.register_user():
-                print("Registration failed")
-                return 1
-        
-        if not client.authenticate():
-            print("Authentication failed")
-            return 1
-        
-        if not args.no_encryption:
-            if not client.perform_key_exchange():
-                client.encryption_enabled = False
+        while True:
+            browser_socket, addr = local_proxy_socket.accept()
+            proxy_thread = threading.Thread(target=handle_browser, 
+                                            args=(browser_socket, addr, VPN_SERVER_HOST, VPN_SERVER_PORT))
+            proxy_thread.start()
+            
+    except OSError as e:
+        if e.errno == 98:
+            print(f"\n[Error] Port {LOCAL_PROXY_PORT} is already in use.")
+            print("Is another copy of the script running?")
         else:
-            client.encryption_enabled = False
-        
-        if args.url:
-            response = client.send_http_request(url=args.url)
-            if response:
-                print(f"HTTP {response['status_code']} - {response['url']}")
-                print(f"Content: {response['content'][:200]}")
-            return 0 if response else 1
-        
-        client.interactive_session()
-        
+            print(f"\n[Error] {e}")
     except KeyboardInterrupt:
-        pass
-    
+        print("\n[Shutting down local proxy]... Goodbye.")
     finally:
-        client.disconnect()
-    
-    return 0
-
+        local_proxy_socket.close()
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
+
